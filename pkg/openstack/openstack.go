@@ -122,6 +122,7 @@ type LoadBalancerOpts struct {
 	IngressHostnameSuffix          string              `gcfg:"ingress-hostname-suffix"`            // Used with proxy protocol by adding a dns suffix to the load balancer IP address. Default nip.io.
 	MaxSharedLB                    int                 `gcfg:"max-shared-lb"`                      //  Number of Services in maximum can share a single load balancer. Default 2
 	ContainerStore                 string              `gcfg:"container-store"`                    // Used to specify the store of the tls-container-ref
+	EnableEndpointMember           bool                `gcfg:"enable-endpoint-member"`             // default false, the controller will use service endpoint for each member in LB pool
 	ProviderRequiresSerialAPICalls bool                `gcfg:"provider-requires-serial-api-calls"` // default false, the provider supports the "bulk update" API call
 	// revive:disable:var-naming
 	TlsContainerRef string `gcfg:"default-tls-container-ref"` //  reference to a tls container
@@ -233,6 +234,7 @@ func ReadConfig(config io.Reader) (Config, error) {
 	cfg.LoadBalancer.ContainerStore = "barbican"
 	cfg.LoadBalancer.MaxSharedLB = 2
 	cfg.LoadBalancer.ProviderRequiresSerialAPICalls = false
+	cfg.LoadBalancer.EnableEndpointMember = false
 
 	err := gcfg.FatalOnly(gcfg.ReadInto(&cfg, config))
 	if err != nil {

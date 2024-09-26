@@ -41,6 +41,7 @@ import (
 	netutils "k8s.io/utils/net"
 	"k8s.io/utils/ptr"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cloud-provider-openstack/pkg/metrics"
 	cpoutil "k8s.io/cloud-provider-openstack/pkg/util"
 	cpoerrors "k8s.io/cloud-provider-openstack/pkg/util/errors"
@@ -275,7 +276,7 @@ func (lbaas *LbaasV2) createOctaviaLoadBalancer(name, clusterName string, servic
 	if !lbaas.opts.ProviderRequiresSerialAPICalls {
 		for portIndex, port := range service.Spec.Ports {
 			listenerCreateOpt := lbaas.buildListenerCreateOpt(port, svcConf, cpoutil.Sprintf255(listenerFormat, portIndex, name))
-			members, newMembers, err := lbaas.buildCreateMemberOpts(port, nodes, svcConf)
+			members, newMembers, err := lbaas.buildCreateMemberOpts(port, service, nodes, svcConf)
 			if err != nil {
 				return nil, err
 			}
@@ -931,7 +932,7 @@ func (lbaas *LbaasV2) ensureOctaviaPool(lbID string, name string, listener *list
 		curMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", m.Name, m.Address, m.ProtocolPort, m.MonitorPort))
 	}
 
-	members, newMembers, err := lbaas.buildBatchUpdateMemberOpts(port, nodes, svcConf)
+	members, newMembers, err := lbaas.buildBatchUpdateMemberOpts(port, service, nodes, svcConf)
 	if err != nil {
 		return nil, err
 	}
@@ -982,46 +983,77 @@ func (lbaas *LbaasV2) buildPoolCreateOpt(listenerProtocol string, service *corev
 }
 
 // buildBatchUpdateMemberOpts returns v2pools.BatchUpdateMemberOpts array for Services and Nodes alongside a list of member names
-func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, nodes []*corev1.Node, svcConf *serviceConfig) ([]v2pools.BatchUpdateMemberOpts, sets.Set[string], error) {
+func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, service *corev1.Service, nodes []*corev1.Node, svcConf *serviceConfig) ([]v2pools.BatchUpdateMemberOpts, sets.Set[string], error) {
 	var members []v2pools.BatchUpdateMemberOpts
 	newMembers := sets.New[string]()
 
-	for _, node := range nodes {
-		addr, err := nodeAddressForLB(node, svcConf.preferredIPFamily)
+	if lbaas.opts.EnableEndpointMember{
+		namespace := service.Namespace
+		serviceName := service.Name
+		// Get the Endpoints associated with the service
+		endpoints, err := lbaas.kclient.CoreV1().Endpoints(namespace).Get(context.TODO(), serviceName, metav1.GetOptions{})
 		if err != nil {
-			if err == cpoerrors.ErrNoAddressFound {
-				// Node failure, do not create member
-				klog.Warningf("Failed to get the address of node %s for creating member: %v", node.Name, err)
-				continue
-			} else {
-				return nil, nil, fmt.Errorf("error getting address of node %s: %v", node.Name, err)
+			return nil, nil, fmt.Errorf("error getting endpoints for service %s in namespace %s: %v", serviceName, namespace, err)
+		}
+
+		for _, subset := range endpoints.Subsets {
+			for _, addr := range subset.Addresses {
+				memberSubnetID := &svcConf.lbMemberSubnetID
+				if memberSubnetID != nil && *memberSubnetID == "" {
+					memberSubnetID = nil
+				}
+		
+				member := v2pools.BatchUpdateMemberOpts{
+					Address:      addr.IP,
+					ProtocolPort: port.TargetPort.IntValue(),
+					Name:         &addr.TargetRef.Name,
+					SubnetID:     memberSubnetID,
+				}
+				members = append(members, member)
+				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
 			}
 		}
 
-		memberSubnetID := &svcConf.lbMemberSubnetID
-		if memberSubnetID != nil && *memberSubnetID == "" {
-			memberSubnetID = nil
+	} else {
+		for _, node := range nodes {
+			addr, err := nodeAddressForLB(node, svcConf.preferredIPFamily)
+			if err != nil {
+				if err == cpoerrors.ErrNoAddressFound {
+					// Node failure, do not create member
+					klog.Warningf("Failed to get the address of node %s for creating member: %v", node.Name, err)
+					continue
+				} else {
+					return nil, nil, fmt.Errorf("error getting address of node %s: %v", node.Name, err)
+				}
+			}
+	
+			memberSubnetID := &svcConf.lbMemberSubnetID
+			if memberSubnetID != nil && *memberSubnetID == "" {
+				memberSubnetID = nil
+			}
+	
+			if port.NodePort != 0 { // It's 0 when AllocateLoadBalancerNodePorts=False
+				member := v2pools.BatchUpdateMemberOpts{
+					Address:      addr,
+					ProtocolPort: int(port.NodePort),
+					Name:         &node.Name,
+					SubnetID:     memberSubnetID,
+				}
+				if svcConf.healthCheckNodePort > 0 && lbaas.canUseHTTPMonitor(port) {
+					member.MonitorPort = &svcConf.healthCheckNodePort
+				}
+				members = append(members, member)
+				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
+			}
 		}
+	
 
-		if port.NodePort != 0 { // It's 0 when AllocateLoadBalancerNodePorts=False
-			member := v2pools.BatchUpdateMemberOpts{
-				Address:      addr,
-				ProtocolPort: int(port.NodePort),
-				Name:         &node.Name,
-				SubnetID:     memberSubnetID,
-			}
-			if svcConf.healthCheckNodePort > 0 && lbaas.canUseHTTPMonitor(port) {
-				member.MonitorPort = &svcConf.healthCheckNodePort
-			}
-			members = append(members, member)
-			newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", node.Name, addr, member.ProtocolPort, svcConf.healthCheckNodePort))
-		}
 	}
 	return members, newMembers, nil
 }
 
-func (lbaas *LbaasV2) buildCreateMemberOpts(port corev1.ServicePort, nodes []*corev1.Node, svcConf *serviceConfig) ([]v2pools.CreateMemberOpts, sets.Set[string], error) {
-	batchUpdateMemberOpts, newMembers, err := lbaas.buildBatchUpdateMemberOpts(port, nodes, svcConf)
+func (lbaas *LbaasV2) buildCreateMemberOpts(port corev1.ServicePort, service *corev1.Service, nodes []*corev1.Node, svcConf *serviceConfig) ([]v2pools.CreateMemberOpts, sets.Set[string], error) {
+	batchUpdateMemberOpts, newMembers, err := lbaas.buildBatchUpdateMemberOpts(port, service, nodes, svcConf)
 	if err != nil {
 		return nil, nil, err
 	}
