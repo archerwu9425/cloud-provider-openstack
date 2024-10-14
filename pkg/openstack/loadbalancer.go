@@ -1009,6 +1009,25 @@ func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, servic
 					Name:         &addr.TargetRef.Name,
 					SubnetID:     memberSubnetID,
 				}
+
+				if lbaas.opts.EnableMultipleAZ{
+					podName := addr.TargetRef.Name
+					pod, err := lbaas.kclient.CoreV1().Pods(namespace).Get(context.TODO(), podName, metav1.GetOptions{})
+					if err != nil {
+						klog.Errorf("Error getting pod %s: %v", podName, err)
+						continue
+					}
+					
+					nodeName := pod.Spec.NodeName
+					node, err := lbaas.kclient.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
+					if err != nil {
+						klog.Errorf("Error retrieving node: %v", err)
+						continue
+					}
+					az := node.Labels["topology.kubernetes.io/zone"]
+					member.Tags = []string{fmt.Sprintf("AvailabilityZone:%s",az)}
+				}
+				
 				members = append(members, member)
 				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
 			}

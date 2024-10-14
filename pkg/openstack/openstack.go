@@ -123,6 +123,7 @@ type LoadBalancerOpts struct {
 	MaxSharedLB                    int                 `gcfg:"max-shared-lb"`                      //  Number of Services in maximum can share a single load balancer. Default 2
 	ContainerStore                 string              `gcfg:"container-store"`                    // Used to specify the store of the tls-container-ref
 	EnableEndpointMember           bool                `gcfg:"enable-endpoint-member"`             // default false, the controller will use service endpoint for each member in LB pool
+	EnableMultipleAZ               bool                `gcfg:"enable-multiple-az"`                 // default false, the controller will check endpoint az and add the endpoint membership to the LB in same az
 	ProviderRequiresSerialAPICalls bool                `gcfg:"provider-requires-serial-api-calls"` // default false, the provider supports the "bulk update" API call
 	// revive:disable:var-naming
 	TlsContainerRef string `gcfg:"default-tls-container-ref"` //  reference to a tls container
@@ -235,6 +236,7 @@ func ReadConfig(config io.Reader) (Config, error) {
 	cfg.LoadBalancer.MaxSharedLB = 2
 	cfg.LoadBalancer.ProviderRequiresSerialAPICalls = false
 	cfg.LoadBalancer.EnableEndpointMember = false
+	cfg.LoadBalancer.EnableMultipleAZ = false
 
 	err := gcfg.FatalOnly(gcfg.ReadInto(&cfg, config))
 	if err != nil {
