@@ -1040,7 +1040,7 @@ func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, servic
 					SubnetID:     memberSubnetID,
 				}
 				members = append(members, member)
-				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
+				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", *member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
 			}
 		}
 
@@ -1073,7 +1073,7 @@ func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, servic
 					member.MonitorPort = &svcConf.healthCheckNodePort
 				}
 				members = append(members, member)
-				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
+				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", *member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
 			}
 		}
 	
