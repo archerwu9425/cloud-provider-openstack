@@ -60,6 +60,7 @@ const (
 	annotationXForwardedFor             = "X-Forwarded-For"
 
 	ServiceAnnotationLoadBalancerInternal             = "service.beta.kubernetes.io/openstack-internal-load-balancer"
+	ServiceAnnotationLoadBalancerNoFloatingIP         = "service.beta.kubernetes.io/openstack-load-balancer-no-floating-ip"
 	ServiceAnnotationLoadBalancerNodeSelector         = "loadbalancer.openstack.org/node-selector"
 	ServiceAnnotationLoadBalancerConnLimit            = "loadbalancer.openstack.org/connection-limit"
 	ServiceAnnotationLoadBalancerFloatingNetworkID    = "loadbalancer.openstack.org/floating-network-id"
@@ -118,6 +119,7 @@ var _ cloudprovider.LoadBalancer = &LbaasV2{}
 // serviceConfig contains configurations for creating a Service.
 type serviceConfig struct {
 	internal                    bool
+	noFloatingIP                bool
 	connLimit                   int
 	configClassName             string
 	lbNetworkID                 string
@@ -1017,7 +1019,7 @@ func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, servic
 	var members []v2pools.BatchUpdateMemberOpts
 	newMembers := sets.New[string]()
 
-	if lbaas.opts.EnableEndpointMember{
+	if lbaas.opts.EnableEndpointMember {
 		namespace := service.Namespace
 		serviceName := service.Name
 		// Get the Endpoints associated with the service
@@ -1032,7 +1034,7 @@ func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, servic
 				if memberSubnetID != nil && *memberSubnetID == "" {
 					memberSubnetID = nil
 				}
-		
+
 				member := v2pools.BatchUpdateMemberOpts{
 					Address:      addr.IP,
 					ProtocolPort: port.TargetPort.IntValue(),
@@ -1056,12 +1058,12 @@ func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, servic
 					return nil, nil, fmt.Errorf("error getting address of node %s: %v", node.Name, err)
 				}
 			}
-	
+
 			memberSubnetID := &svcConf.lbMemberSubnetID
 			if memberSubnetID != nil && *memberSubnetID == "" {
 				memberSubnetID = nil
 			}
-	
+
 			if port.NodePort != 0 { // It's 0 when AllocateLoadBalancerNodePorts=False
 				member := v2pools.BatchUpdateMemberOpts{
 					Address:      addr,
@@ -1076,7 +1078,6 @@ func (lbaas *LbaasV2) buildBatchUpdateMemberOpts(port corev1.ServicePort, servic
 				newMembers.Insert(fmt.Sprintf("%s-%s-%d-%d", *member.Name, member.Address, member.ProtocolPort, member.MonitorPort))
 			}
 		}
-	
 
 	}
 	return members, newMembers, nil
@@ -1412,6 +1413,8 @@ func (lbaas *LbaasV2) checkService(ctx context.Context, service *corev1.Service,
 	} else {
 		svcConf.internal = getBoolFromServiceAnnotation(service, ServiceAnnotationLoadBalancerInternal, lbaas.opts.InternalLB)
 	}
+
+	svcConf.noFloatingIP = getBoolFromServiceAnnotation(service, ServiceAnnotationLoadBalancerNoFloatingIP, false)
 
 	svcConf.tlsContainerRef = getStringFromServiceAnnotation(service, ServiceAnnotationTlsContainerRef, lbaas.opts.TlsContainerRef)
 	if svcConf.tlsContainerRef != "" {
@@ -1848,9 +1851,13 @@ func (lbaas *LbaasV2) ensureOctaviaLoadBalancer(ctx context.Context, clusterName
 		lbaas.eventRecorder.Eventf(service, corev1.EventTypeWarning, eventLBFloatingIPSkipped, msg, serviceName, addr)
 		klog.Infof(msg, serviceName, addr)
 	} else {
-		addr, err = lbaas.ensureFloatingIP(ctx, clusterName, service, loadbalancer, svcConf, isLBOwner)
-		if err != nil {
-			return nil, err
+		if svcConf.noFloatingIP {
+			klog.InfoS("Sevice request no Floating IP for LB", "lbID", loadbalancer.ID)
+		} else {
+			addr, err = lbaas.ensureFloatingIP(ctx, clusterName, service, loadbalancer, svcConf, isLBOwner)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
