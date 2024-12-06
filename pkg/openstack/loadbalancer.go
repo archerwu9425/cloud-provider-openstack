@@ -60,7 +60,7 @@ const (
 	annotationXForwardedFor             = "X-Forwarded-For"
 
 	ServiceAnnotationLoadBalancerInternal             = "service.beta.kubernetes.io/openstack-internal-load-balancer"
-	ServiceAnnotationLoadBalancerNoFloatingIP         = "service.beta.kubernetes.io/openstack-load-balancer-no-floating-ip"
+	ServiceAnnotationLoadBalancerIgnoreFloatingIP     = "service.beta.kubernetes.io/openstack-load-balancer-ignore-floating-ip"
 	ServiceAnnotationLoadBalancerNodeSelector         = "loadbalancer.openstack.org/node-selector"
 	ServiceAnnotationLoadBalancerConnLimit            = "loadbalancer.openstack.org/connection-limit"
 	ServiceAnnotationLoadBalancerFloatingNetworkID    = "loadbalancer.openstack.org/floating-network-id"
@@ -119,7 +119,7 @@ var _ cloudprovider.LoadBalancer = &LbaasV2{}
 // serviceConfig contains configurations for creating a Service.
 type serviceConfig struct {
 	internal                    bool
-	noFloatingIP                bool
+	ignoreFloatingIP            bool
 	connLimit                   int
 	configClassName             string
 	lbNetworkID                 string
@@ -1414,7 +1414,7 @@ func (lbaas *LbaasV2) checkService(ctx context.Context, service *corev1.Service,
 		svcConf.internal = getBoolFromServiceAnnotation(service, ServiceAnnotationLoadBalancerInternal, lbaas.opts.InternalLB)
 	}
 
-	svcConf.noFloatingIP = getBoolFromServiceAnnotation(service, ServiceAnnotationLoadBalancerNoFloatingIP, false)
+	svcConf.ignoreFloatingIP = getBoolFromServiceAnnotation(service, ServiceAnnotationLoadBalancerIgnoreFloatingIP, false)
 
 	svcConf.tlsContainerRef = getStringFromServiceAnnotation(service, ServiceAnnotationTlsContainerRef, lbaas.opts.TlsContainerRef)
 	if svcConf.tlsContainerRef != "" {
@@ -1851,8 +1851,8 @@ func (lbaas *LbaasV2) ensureOctaviaLoadBalancer(ctx context.Context, clusterName
 		lbaas.eventRecorder.Eventf(service, corev1.EventTypeWarning, eventLBFloatingIPSkipped, msg, serviceName, addr)
 		klog.Infof(msg, serviceName, addr)
 	} else {
-		if svcConf.noFloatingIP {
-			klog.InfoS("Sevice request no Floating IP for LB", "lbID", loadbalancer.ID)
+		if svcConf.ignoreFloatingIP {
+			klog.InfoS("Sevice request irgnore Floating IP for LB", "lbID", loadbalancer.ID)
 		} else {
 			addr, err = lbaas.ensureFloatingIP(ctx, clusterName, service, loadbalancer, svcConf, isLBOwner)
 			if err != nil {
